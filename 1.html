@@ -1,28 +1,63 @@
-<!DOCTYPE html>
-<html>
-    <head>
-        <title>MICO Platform</title>
-        <meta charset="utf-8">
-        <style>
-            a {
-                text-decoration: none;
-                color: inherit;
+document.addEventListener("DOMContentLoaded", function () {
+    // ✅ 전역 chartData가 존재하면 차트 그리기 실행
+    if (window.chartData && Array.isArray(window.chartData.b0)) {
+        drawScatterCharts(window.chartData);
+    }
+
+    // 다른 이벤트 핸들러들(addEventListener)도 여기에...
+});
+
+function drawScatterCharts(chartData) {
+    function groupByVariable(data) {
+        const grouped = {};
+        data.forEach(row => {
+            const name = row.variable;
+            if (!grouped[name]) grouped[name] = [];
+            grouped[name].push({ x: row.Date, y: row.value });
+        });
+        return grouped;
+    }
+
+    function buildDatasets(grouped) {
+        return Object.keys(grouped).map(name => ({
+            label: name,
+            data: grouped[name],
+            showLine: false,
+            pointRadius: 4
+        }));
+    }
+
+    const b0Grouped = groupByVariable(chartData.b0 || []);
+    const b1Grouped = groupByVariable(chartData.b1 || []);
+
+    const b0Canvas = document.getElementById('b0Chart');
+    const b1Canvas = document.getElementById('b1Chart');
+
+    if (b0Canvas) {
+        new Chart(b0Canvas, {
+            type: 'scatter',
+            data: { datasets: buildDatasets(b0Grouped) },
+            options: {
+                plugins: { title: { display: true, text: 'B0 Scatter Chart' } },
+                scales: {
+                    x: { type: 'time', title: { display: true, text: 'Date' } },
+                    y: { title: { display: true, text: 'Value' } }
+                }
             }
-            a:visited{
-                color: inherit;
+        });
+    }
+
+    if (b1Canvas) {
+        new Chart(b1Canvas, {
+            type: 'scatter',
+            data: { datasets: buildDatasets(b1Grouped) },
+            options: {
+                plugins: { title: { display: true, text: 'B1 Scatter Chart' } },
+                scales: {
+                    x: { type: 'time', title: { display: true, text: 'Date' } },
+                    y: { title: { display: true, text: 'Value' } }
+                }
             }
-            h1 {
-                font-size: 45px;
-                text-align: center;
-            }
-        </style>
-        <h1><a href="1.html">MICO Platform</a></h1>
-    </head>
-    <body>
-        <ul style="list-style-type: none;">
-            <li><a href="setup.html"><strong>SET-UP</strong></a></li>
-            <li><a href="history.html"><strong>HISTORY</strong></a></li>
-            <li><a href="alarm_log.html"><strong>ALARM LOG</strong></a></li>
-        </ul>
-    </body>
-</html>
+        });
+    }
+}
