@@ -1,61 +1,86 @@
-document.addEventListener("DOMContentLoaded", function () {
-    // 차트가 필요한 페이지에서만 실행
-    if (window.chartData && document.getElementById('b0Chart')) {
-        drawScatterCharts(window.chartData);
-    }
-
-    // 기존 inline.js의 다른 코드들도 여기서 실행
-});
-
 function drawScatterCharts(chartData) {
-    if (!chartData || !Array.isArray(chartData.b0) || !Array.isArray(chartData.b1)) {
-        console.warn("chartData가 유효하지 않음:", chartData);
-        return;
-    }
+    const targets = [
+        'b0', 'b1', 'weighted_b0', 'weighted_b1',
+        'current_b0', 'current_b1', 'if_b0', 'if_b1'
+    ];
 
-    function groupByVariable(data) {
-        const grouped = {};
-        data.forEach(row => {
-            const name = row.variable;
-            if (!grouped[name]) grouped[name] = [];
-            grouped[name].push({ x: row.Date, y: row.value });
+    targets.forEach(target => {
+        const canvasId = `${target}Chart`;
+        const ctx = document.getElementById(canvasId);
+
+        if (!ctx) return;
+
+        const rawData = chartData[target];
+        if (!rawData || rawData.length === 0) return;
+
+        const grouped = groupBy(rawData, 'variable');
+
+        const datasets = Object.keys(grouped).map(variable => {
+            return {
+                label: variable,
+                data: grouped[variable].map(item => ({ x: item.Date, y: item.value })),
+                showLine: false,
+                pointRadius: 3,
+            };
         });
-        return grouped;
-    }
 
-    function buildDatasets(grouped) {
-        return Object.keys(grouped).map(name => ({
-            label: name,
-            data: grouped[name],
-            showLine: false,
-            pointRadius: 4
-        }));
-    }
+        // Upper Spec Line
+        const upperSpec = rawData.map(item => ({ x: item.Date, y: item.upper_spec }));
+        datasets.push({
+            label: "Upper Spec",
+            data: upperSpec,
+            borderColor: "red",
+            borderDash: [5, 5],
+            fill: false,
+            type: "line",
+            pointRadius: 0,
+            tension: 0
+        });
 
-    const b0Grouped = groupByVariable(chartData.b0 || []);
-    const b1Grouped = groupByVariable(chartData.b1 || []);
+        // Lower Spec Line
+        const lowerSpec = rawData.map(item => ({ x: item.Date, y: item.lower_spec }));
+        datasets.push({
+            label: "Lower Spec",
+            data: lowerSpec,
+            borderColor: "blue",
+            borderDash: [5, 5],
+            fill: false,
+            type: "line",
+            pointRadius: 0,
+            tension: 0
+        });
 
-    new Chart(document.getElementById('b0Chart'), {
-        type: 'scatter',
-        data: { datasets: buildDatasets(b0Grouped) },
-        options: {
-            plugins: { title: { display: true, text: 'B0 Scatter Chart' } },
-            scales: {
-                x: { type: 'time', title: { display: true, text: 'Date' } },
-                y: { title: { display: true, text: 'Value' } }
+        new Chart(ctx, {
+            type: 'scatter',
+            data: { datasets: datasets },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: true }
+                },
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            tooltipFormat: 'yy/MM/dd HH:mm',
+                            unit: 'day'
+                        },
+                        title: { display: true, text: 'Date' }
+                    },
+                    y: {
+                        title: { display: true, text: target }
+                    }
+                }
             }
-        }
+        });
     });
+}
 
-    new Chart(document.getElementById('b1Chart'), {
-        type: 'scatter',
-        data: { datasets: buildDatasets(b1Grouped) },
-        options: {
-            plugins: { title: { display: true, text: 'B1 Scatter Chart' } },
-            scales: {
-                x: { type: 'time', title: { display: true, text: 'Date' } },
-                y: { title: { display: true, text: 'Value' } }
-            }
-        }
-    });
+function groupBy(arr, key) {
+    return arr.reduce((acc, item) => {
+        const groupKey = item[key];
+        if (!acc[groupKey]) acc[groupKey] = [];
+        acc[groupKey].push(item);
+        return acc;
+    }, {});
 }
