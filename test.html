@@ -1,30 +1,93 @@
-<!doctype html>
-<html lang="ko">
-  <head>
-    <meta charset="utf-8">
-    <title>A Basic HTML5 Template</title>
-    <meta name="description" content="A simple HTML5 Template for new projects.">
-    <meta name="author" content="SitePoint"> 
+function drawScatterCharts(chartData) {
+    const chartKeys = ['b0', 'weighted_b0', 'current_b0', 'if_b0', 'b1', 'weighted_b1', 'current_b1', 'if_b1'];
+    const specLines = chartData['spec_lines'];
 
-    <link rel="icon" href="/favicon.ico">
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    chartKeys.forEach(key => {
+        const canvas = document.getElementById(key);
+        if (!canvas) {
+            console.warn(`Canvas for ${key} not found.`);
+            return;
+        }
 
-    <script src="js/scripts.js"></script>
-      
-    <link rel="stylesheet" href="css/styles.css?v=1.0">
-    <style>
-      p {
-        color: #8ebf42;
-      }
-    </style>
-  </head>
-      
-  
+        const ctx = canvas.getContext('2d');
+        const dataSet = chartData[key];
 
-  <body>
-    <!-- your content here... -->
-    <p>hello world with p</p>    
-    <text>hello world w/o  p</text>
-  </body>
-</html>
+        // 날짜별 데이터 포맷 변경
+        const grouped = {};
+        dataSet.forEach(d => {
+            const date = d['Date'];
+            const label = d['variable'];
+            const value = parseFloat(d['value']);
+            if (!grouped[label]) grouped[label] = [];
+            grouped[label].push({ x: date, y: value });
+        });
+
+        // Scatter 데이터셋 생성
+        const datasets = Object.keys(grouped).map(label => {
+            const baseColor = getRandomColor();
+            return {
+                label: label,
+                data: grouped[label],
+                backgroundColor: baseColor,
+                pointRadius: 3
+            };
+        });
+
+        // ±6Sigma Spec 라인 추가
+        if (specLines[key]) {
+            const upper = specLines[key].upper;
+            const lower = specLines[key].lower;
+            datasets.push({
+                label: 'Spec +6σ',
+                data: dataSet.map(d => ({ x: d['Date'], y: upper })),
+                type: 'line',
+                borderColor: 'red',
+                borderWidth: 1,
+                fill: false,
+                pointRadius: 0
+            });
+            datasets.push({
+                label: 'Spec -6σ',
+                data: dataSet.map(d => ({ x: d['Date'], y: lower })),
+                type: 'line',
+                borderColor: 'blue',
+                borderWidth: 1,
+                fill: false,
+                pointRadius: 0
+            });
+        }
+
+        // Chart 생성
+        new Chart(ctx, {
+            type: 'scatter',
+            data: { datasets: datasets },
+            options: {
+                responsive: true,
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'day',
+                            tooltipFormat: 'YYYY-MM-DD HH:mm'
+                        },
+                        title: { display: true, text: 'Date' }
+                    },
+                    y: {
+                        title: { display: true, text: key }
+                    }
+                },
+                plugins: {
+                    legend: { display: true }
+                }
+            }
+        });
+    });
+}
+
+// ✅ 색상 유틸 함수
+function getRandomColor() {
+    const r = Math.floor(100 + Math.random() * 155);
+    const g = Math.floor(100 + Math.random() * 155);
+    const b = Math.floor(100 + Math.random() * 155);
+    return `rgb(${r}, ${g}, ${b})`;
+}
