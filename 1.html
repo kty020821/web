@@ -1,86 +1,59 @@
-function drawScatterCharts(chartData) {
-    const targets = [
-        'b0', 'b1', 'weighted_b0', 'weighted_b1',
-        'current_b0', 'current_b1', 'if_b0', 'if_b1'
-    ];
+{% extends 'analysis.html' %}
+{% load static %}
 
-    targets.forEach(target => {
-        const canvasId = `${target}Chart`;
-        const ctx = document.getElementById(canvasId);
+{% block analysis_content %}
+<div class="rr-wrapper">
+    <h2>Removal Rate 조회</h2>
+    <form method="post" class="rr-form">
+        {% csrf_token %}
+        <div class="rr-input-row">
+            <input type="text" class="rr-input" id="fab" name="fab" placeholder="Fab" value="{{ selected_fab }}">
+            <input type="text" class="rr-input" id="tech" name="tech" placeholder="TECH" value="{{ selected_tech }}">
+            <input type="text" class="rr-input" id="lot_cd" name="lot_cd" placeholder="LOT_CD" value="{{ selected_lot_cd }}">
+            <input type="text" class="rr-input" id="process" name="process" placeholder="공정명" value="{{ selected_process }}">
+            <input type="text" class="rr-input" id="eqp_id" name="eqp_id" placeholder="EQP_ID" value="{{ selected_eqp_id }}">
+            <input type="text" class="rr-input" id="apc_parameter" name="apc_parameter" placeholder="APC_PARA" value="{{ selected_apc_parameter }}">
+            <button type="submit" class="rr-button">조회</button>
+        </div>
+    </form>
 
-        if (!ctx) return;
+    {% if data %}
+        <div class="rr-table-container">
+            <h3></h3>
+            <table border="1" class="rr-table">
+                <thead>
+                    <tr>
+                        {% for key in data.0.keys %}
+                            <th>{{ key }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in data %}
+                        <tr>
+                            {% for key, value in row.items %}
+                                <td>{{ value }}</td>
+                            {% endfor %}
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p>No Data</p>
+    {% endif %}
+    <canvas id="b0"></canvas>
+    <canvas id="b0_weighted"></canvas>
+    <canvas id="b0_current"></canvas>
+    <canvas id="b0_if"></canvas>
 
-        const rawData = chartData[target];
-        if (!rawData || rawData.length === 0) return;
-
-        const grouped = groupBy(rawData, 'variable');
-
-        const datasets = Object.keys(grouped).map(variable => {
-            return {
-                label: variable,
-                data: grouped[variable].map(item => ({ x: item.Date, y: item.value })),
-                showLine: false,
-                pointRadius: 3,
-            };
-        });
-
-        // Upper Spec Line
-        const upperSpec = rawData.map(item => ({ x: item.Date, y: item.upper_spec }));
-        datasets.push({
-            label: "Upper Spec",
-            data: upperSpec,
-            borderColor: "red",
-            borderDash: [5, 5],
-            fill: false,
-            type: "line",
-            pointRadius: 0,
-            tension: 0
-        });
-
-        // Lower Spec Line
-        const lowerSpec = rawData.map(item => ({ x: item.Date, y: item.lower_spec }));
-        datasets.push({
-            label: "Lower Spec",
-            data: lowerSpec,
-            borderColor: "blue",
-            borderDash: [5, 5],
-            fill: false,
-            type: "line",
-            pointRadius: 0,
-            tension: 0
-        });
-
-        new Chart(ctx, {
-            type: 'scatter',
-            data: { datasets: datasets },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: { display: true }
-                },
-                scales: {
-                    x: {
-                        type: 'time',
-                        time: {
-                            tooltipFormat: 'yy/MM/dd HH:mm',
-                            unit: 'day'
-                        },
-                        title: { display: true, text: 'Date' }
-                    },
-                    y: {
-                        title: { display: true, text: target }
-                    }
-                }
-            }
-        });
-    });
-}
-
-function groupBy(arr, key) {
-    return arr.reduce((acc, item) => {
-        const groupKey = item[key];
-        if (!acc[groupKey]) acc[groupKey] = [];
-        acc[groupKey].push(item);
-        return acc;
-    }, {});
-}
+    <canvas id="b1"></canvas>
+    <canvas id="b1_weighted"></canvas>
+    <canvas id="b1_current"></canvas>
+    <canvas id="b1_if"></canvas>
+    <script>
+        window.chartData = JSON.parse('{{ chart_data_json|safe }}');
+        drawScatterCharts(window.chartData);
+    </script>
+</div>
+{% endblock %}
