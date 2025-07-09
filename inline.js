@@ -23,6 +23,17 @@ function drawScatterCharts(chartData) {
             y: item.lower_spec
         }));
 
+        const yValues = chartData[id].map(item => [
+            item.values,
+            item.upper_sepc,
+            item.lower_spec
+        ]).flat().filter(v => typeof v === 'number' && !isNaN(v) && isFinite(v));
+
+        const yMin = Math.min(...yValues);
+        const yMax = Math.max(...yValues);
+        const yRange = yMax - yMin;
+        const yPadding = yRange * 0.3;
+
         new Chart(canvas, {
             type: 'scatter',
             data: {
@@ -31,14 +42,16 @@ function drawScatterCharts(chartData) {
                         label: `${id}`,
                         data: values,
                         backgroundColor: 'blue',
-                        showLine: false
+                        showLine: false,
+                        pointRadius : 5
+
                     },
                     {
-                        label: None,
+                        label: 'Spec High',
                         data: specHigh,
                         type: 'line',
                         borderColor: 'red',
-                        borderWidth: 1,
+                        borderWidth: 3,
                         pointRadius: 0,
                         fill: false
                     },
@@ -47,7 +60,7 @@ function drawScatterCharts(chartData) {
                         data: specLow,
                         type: 'line',
                         borderColor: 'red',
-                        borderWidth: 1,
+                        borderWidth: 3,
                         pointRadius: 0,
                         fill: false
                     }
@@ -57,10 +70,13 @@ function drawScatterCharts(chartData) {
                 plugins: {
                     title: {
                         display: true,
-                        text: `Chart: ${id}`
+                        text: `${id}`,
+                        font: {
+                            size: 30
+                        }
                     },
                     legend: {
-                        position: 'top'
+                        display: false
                     }
                 },
                 scales: {
@@ -68,19 +84,39 @@ function drawScatterCharts(chartData) {
                         type: 'time',
                         title: {
                             display: true,
-                            text: 'Date'
+                            font: {
+                                size: 30
+                            }
                         },
                         time: {
-                            tooltipFormat: 'yyyy-MM-dd HH:mm',
-                            unit: 'day'
+                            unit: 'day',
+                            tooltipFormat: 'MM-dd',
+                        },
+                        grid: {
+                            display: false
+                        },
+                        ticks: {
+                            font: {
+                                size: 20,
+                                weight : 'bold'
+                            }
                         }
                     },
                     y: {
                         title: {
                             display: true,
-                            text: id
                         },
-                        beginAtZero: false
+                        grid: {
+                            display: false
+                        },
+                        ticks: { 
+                            font: {
+                                size: 25,
+                                weight : 'bold'
+                            }
+                        },
+                        suggestedMin: yMin - yPadding,
+                        suggestedMax: yMax + yPadding
                     }
                 }
             }
