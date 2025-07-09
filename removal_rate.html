@@ -42,14 +42,16 @@
     {% else %}
         <p>No Data</p>
     {% endif %}
-    <canvas id="b0" width="60" height="30" ></canvas>
-    <canvas id="b0_weighted"></canvas>
-    <canvas id="b0_current"></canvas>
-    <canvas id="if_b0"></canvas>
-    <canvas id="b1"></canvas>
-    <canvas id="b1_weighted"></canvas>
-    <canvas id="b1_current"></canvas>
-    <canvas id="if_b1"></canvas>
+    <div class="chart-grid">
+        <canvas id="b0"></canvas>
+        <canvas id="b0_weighted"></canvas>
+        <canvas id="b0_current"></canvas>
+        <canvas id="if_b0"></canvas>
+        <canvas id="b1"></canvas>
+        <canvas id="b1_weighted"></canvas>
+        <canvas id="b1_current"></canvas>
+        <canvas id="if_b1"></canvas>
+    </div>
     <script>
         window.chartData = JSON.parse('{{ chart_data_json|safe }}');
         drawScatterCharts(window.chartData);
