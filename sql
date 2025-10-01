@@ -1,44 +1,35 @@
 import pandas as pd
 
-def parse_kv_string(s, kv_sep="=", item_sep=";", key_case="lower"):
-    out = {}
-    if s is None:
-        return out
-    if not isinstance(s, str):
-        s = str(s)
-    if not s:
-        return out
-    for tok in s.split(item_sep):
-        tok = tok.strip()
-        if not tok or kv_sep not in tok:
-            continue
-        k, v = tok.split(kv_sep, 1)
-        k, v = k.strip(), v.strip()
-        if key_case == "lower":
-            k = k.lower()
-        elif key_case == "upper":
-            k = k.upper()
-        out[k] = v
-    return out
+def pick_single_row(df, id_col, recipe_col, eqp_id, recipe_val):
+    sel = df[(df[id_col].astype(str) == str(eqp_id)) & (df[recipe_col].astype(str) == str(recipe_val))]
+    if len(sel) == 0:
+        raise ValueError(f"조건에 해당하는 행이 없습니다: {id_col}={eqp_id}, {recipe_col}={recipe_val}")
+    if len(sel) > 1:
+        raise ValueError(f"조건에 해당하는 행이 2개 이상입니다(1개만 허용): {id_col}={eqp_id}, {recipe_col}={recipe_val}, count={len(sel)}")
+    return sel.iloc[0]
 
-def expand_one_kv_col(df, kv_col, key_case="lower"):
-    # kv_col만 확장 → 새 컬럼명은 'kv_col__key'
-    dicts, all_keys = [], set()
-    for _, row in df.iterrows():
-        d = parse_kv_string(row.get(kv_col), key_case=key_case)
-        dicts.append(d)
-        all_keys.update(d.keys())
-    out = df.copy()
-    for k in sorted(all_keys):
-        out[f"{kv_col}__{k}"] = [d.get(k) for d in dicts]
-    return out
+def compare_two_conditions(df, id_col="EQP_ID", recipe_col="recipe_para",
+                           left_eqp="A", left_recipe="D",
+                           right_eqp="B", right_recipe="D",
+                           treat_missing_as_diff=True):
+    """
+    두 조건의 단일 행을 뽑아 (id_col, recipe_col) 제외 컬럼을 비교.
+    - treat_missing_as_diff=True면 NaN vs 값은 '다름', NaN vs NaN은 '같음'
+    """
+    left_row  = pick_single_row(df, id_col, recipe_col, left_eqp, left_recipe)
+    right_row = pick_single_row(df, id_col, recipe_col, right_eqp, right_recipe)
 
-def expand_two_kv_cols_separately(df, col1, col2, key_case="lower", drop_original=False):
-    # col1 확장 + col2 확장 → 병합 (키가 안겹친다는 전제)
-    a = expand_one_kv_col(df, col1, key_case=key_case)
-    b = expand_one_kv_col(df, col2, key_case=key_case)
-    col2_expanded_only = [c for c in b.columns if c.startswith(f"{col2}__")]
-    out = a.join(b[col2_expanded_only])
-    if drop_original:
-        out = out.drop(columns=[c for c in [col1, col2] if c in out.columns])
-    return out
+    exclude = {id_col, recipe_col}
+    value_cols = [c for c in df.columns if c not in exclude]
+
+    rows = []
+    for c in value_cols:
+        lv = left_row[c]
+        rv = right_row[c]
+        same = (pd.isna(lv) and pd.isna(rv)) or (lv == rv)
+        if treat_missing_as_diff and ((pd.isna(lv) and not pd.isna(rv)) or (not pd.isna(lv) and pd.isna(rv))):
+            same = False
+        rows.append({"column": c, f"{left_eqp}:{left_recipe}": lv, f"{right_eqp}:{right_recipe}": rv, "same": bool(same)})
+    full = pd.DataFrame(rows)
+    diff_only = full[~full["same"]].reset_index(drop=True)
+    return full, diff_only
