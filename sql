@@ -1,83 +1,44 @@
-select *
-                    from ( SELECT A.lot_id, A.wf_id, A.main_eqp_id, A.param_nm, A.oper_id, A.oper_det_desc, A.meas_val as THK_VALUE, A.end_tm, B.eqp_id as pre_eqp_id, C.Recipe_rank,
-                                    B.module_id as pre_eqp_ch, B.last_update_dtts as pre_oper_time, RANK() over(partition by A.lot_id, A.wf_id, A.param_nm order by A.end_tm DESC ) r2r_rank
-                            FROM tas.tas_src_wf_metr_inf A
-                            left join ( select lot_id, slot_id, wf_id, eqp_id, module_id, last_update_dtts
-                                        from apc.apc_sk_wafer_hst_r2r_all_m10
-                                        where 1=1
-                                        and dt between '20250618' and '20250718'
-                                        and operation_id like '-%'
-                                        and resource_type = 'INDEPENDENT'
-                                        
-                                        union
-                                        select lot_id, slot_id, wf_id, eqp_id, module_id, last_update_dtts
-                                        from apc.apc_sk_wafer_hst_r2r_all_m11
-                                        where 1=1
-                                        and dt between '20250618' and '20250718'
-                                        and operation_id like '-%'
-                                        and resource_type = 'INDEPENDENT'
-                                        
-                                        union
-                                        select lot_id, slot_id, wf_id, eqp_id, module_id, last_update_dtts
-                                        from apc.apc_sk_wafer_hst_r2r_all_m14
-                                        where 1=1
-                                        and dt between '20250618' and '20250718'
-                                        and operation_id like '-%'
-                                        and resource_type = 'INDEPENDENT'
-                                        
-                                        union
-                                        select lot_id, slot_id, wf_id, eqp_id, module_id, last_update_dtts
-                                        from apc.apc_sk_wafer_hst_r2r_all_m15
-                                        where 1=1
-                                        and dt between '20250618' and '20250718'
-                                        and operation_id like '-%'
-                                        and resource_type = 'INDEPENDENT'
-                                        
-                                        union
-                                        select lot_id, slot_id, wf_id, eqp_id, module_id, last_update_dtts
-                                        from apc.apc_sk_wafer_hst_r2r_m16
-                                        where 1=1
-                                        and mt between '202506' and '202507'
-                                        and operation_id like '-%'
-                                        and resource_type = 'INDEPENDENT'
-                                        
-                                        ) B on CONCAT(left(A.lot_id, 7), '.', A.wf_id) = CONCAT(left(B.lot_id, 7), '.', B.slot_id)
-                                                
-                        left join (  select distinct D.lot_id, D.eqp_recipe_id, D.Recipe_rank
-                                        from ( 
-                                        select lot_id, crt_tm, eqp_recipe_id, RANK() over (partition by lot_id order by crt_tm desc) Recipe_rank
-                                        from DCP.DCP_DCP_DCOLDATA_INF_M15
-                                        where 1=1
-                                        and SUBSTRING(lot_id,2,2) = '9C'
-                                        and oper_id = 'A4097000A'
-                                        and dt between '20250618' and '20250718'
-                                        ) D
-                                    where 1=1
-                                    and D.Recipe_rank = 1
-                                    ) C on A.lot_id = C.lot_id
-                            
-                    where A.mt between '202506' and '202507'
-                    and A.end_tm >= '2025-06-18'
-                    and A.end_tm <= '2025-07-18'
-                    and A.oper_id = 'A4097000A'
-                    and right(A.lot_cd, 2) = '9C'
-                    and C.eqp_recipe_id like '9C_SLIMOX%'
-                    and ( 
-                        (A.param_nm like '%POST_THK%' and A.param_nm like '%_AVG' and A.param_nm not like '%GOF%')    
-                        or (A.param_nm like '%POST_THK%' and A.param_nm like '%_AVG_A%' and A.param_nm not like '%GOF%')    
-                        or (A.param_nm like '%POST_THK%' and A.param_nm like '%THK2_A%' and A.param_nm not like '%GOF%')   
-                        or (A.param_nm like '%PRE_THK%' and A.param_nm like '%_AVG' and A.param_nm not like '%GOF%')   
-                        or (A.param_nm like '%POST_THK%' and A.param_nm like '%_RAN' and A.param_nm not like '%GOF%') 
-                        or (A.param_nm like '%REV%' and A.param_nm like '%_AVG' )
-                        or (A.param_nm like '%REV%' and A.param_nm like '%_Z%' )
-                        or (A.param_nm like '%REV%' and A.param_nm like '%_RAN' )
-                        or A.param_nm like 'EBARA_PAD_%'
-                        or A.param_nm like 'EBARA_HEAD_%'
-                        or A.param_nm like 'EBARA_DISK_%'
-                        or A.param_nm like 'DISK_TIME_%'
-                        or A.param_nm like 'HEAD_TIME_%'
-                        or A.param_nm like 'PAD_TIME_%'
-                    )
-                ) B
-                where B.r2r_rank = 1
-                and B.lot_id = '59C0602'
+import pandas as pd
+
+def parse_kv_string(s, kv_sep="=", item_sep=";", key_case="lower"):
+    out = {}
+    if s is None:
+        return out
+    if not isinstance(s, str):
+        s = str(s)
+    if not s:
+        return out
+    for tok in s.split(item_sep):
+        tok = tok.strip()
+        if not tok or kv_sep not in tok:
+            continue
+        k, v = tok.split(kv_sep, 1)
+        k, v = k.strip(), v.strip()
+        if key_case == "lower":
+            k = k.lower()
+        elif key_case == "upper":
+            k = k.upper()
+        out[k] = v
+    return out
+
+def expand_one_kv_col(df, kv_col, key_case="lower"):
+    # kv_col만 확장 → 새 컬럼명은 'kv_col__key'
+    dicts, all_keys = [], set()
+    for _, row in df.iterrows():
+        d = parse_kv_string(row.get(kv_col), key_case=key_case)
+        dicts.append(d)
+        all_keys.update(d.keys())
+    out = df.copy()
+    for k in sorted(all_keys):
+        out[f"{kv_col}__{k}"] = [d.get(k) for d in dicts]
+    return out
+
+def expand_two_kv_cols_separately(df, col1, col2, key_case="lower", drop_original=False):
+    # col1 확장 + col2 확장 → 병합 (키가 안겹친다는 전제)
+    a = expand_one_kv_col(df, col1, key_case=key_case)
+    b = expand_one_kv_col(df, col2, key_case=key_case)
+    col2_expanded_only = [c for c in b.columns if c.startswith(f"{col2}__")]
+    out = a.join(b[col2_expanded_only])
+    if drop_original:
+        out = out.drop(columns=[c for c in [col1, col2] if c in out.columns])
+    return out
