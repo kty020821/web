@@ -1,6 +1,3 @@
-import pandas as pd
-from typing import List
-
 def compare_equal_by_fab(
     df: pd.DataFrame,
     fab_col: str = "Fab",
@@ -78,3 +75,77 @@ def compare_equal_by_fab(
         out = out[~out["__is_equal"]]
 
     return out.reset_index()
+
+doc_id = '20622721760576608613'
+gds_df = goodDocsGetData(doc_id)
+
+base_df = gds_df.copy()
+test_df= base_df.copy()
+test_df['FAB'] = 'M15'
+
+setup_df = pd.concat([base_df, test_df], axis=0)
+setup_df.reset_index(inplace=True)
+print(setup_df)
+
+oper_list = list(setup_df['PROC'].unique())
+print(oper_list)
+
+
+
+
+
+for oper in oper_list:
+
+    setup_df_2 = setup_df[(setup_df['PROC'] == oper)].copy()
+    formula_df = pd.DataFrame()
+
+    Fab_list = list(setup_df_2['FAB'].unique())
+    print(Fab_list)
+    
+    for fab in Fab_list :
+        print(fab)
+        print(oper)
+        setup_df_3 = setup_df_2[(setup_df_2['FAB'] == fab)].copy()
+        print(setup_df_3.head())
+        sql_cond =list(setup_df_3['FORMULA GR'].unique())
+        print(sql_cond)
+        
+        project_name_2 = 'm15x-apc-compare-table2'
+        api_name_2 = f'{fab.lower()}-cmp-apc-formula-table'
+    
+        print(api_name_2)
+    
+        access_url_2 = f'http://dp.skhynix.com:8080/datahub/v1/api/{project_name_2}/{api_name_2}'
+        
+        api_key = '4f60cb40-4b6c-4240-94ad-8920fb1e8c50'
+        
+        headers = {'h-api-token':api_key, 
+                   'Content-Type':'application/json'}
+        
+        data_2 = {"bindParams": [sql_cond]}
+        
+        resp_2 = requests.post(access_url_2, headers=headers, json=data_2)
+        print(resp_2)
+    
+        try :
+            df_2 = pd.read_json(StringIO(resp_2.text))
+        
+            df_2['Fab'] = fab
+            
+            if df_2.empty == False:
+            
+                if formula_df.empty == True :
+                    formula_df = df_2
+                else :
+                    formula_df = pd.concat([formula_df, df_2], axis=0) 
+                    
+                    
+        except Exception as e :
+            print(f"Error : {e}")
+    print(formula_df)
+
+    formula_df['OPER']
+    
+    compare_formula_table = compare_equal_by_fab(formula_df, case_sensitive=False, strip_spaces=True)
+    compare_formula_table.to_csv(f'compare_formula_table_{oper}.csv')   
+
