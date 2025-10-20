@@ -1,71 +1,111 @@
-def compare_equal_by_fab(
+import pandas as pd
+import numpy as np
+import re
+from typing import List, Tuple
+
+def compare_equal_by_fab_split(
     df: pd.DataFrame,
     fab_col: str = "Fab",
     cond_cols: List[str] = ["FORMULA_GRP_NAME", "FORMULA", "OPERAND_NAME"],
+    seq_col: str = "SEQ",
     value_col: str = "OPERAND_VALUE",
     mismatched_only: bool = False,
-    strip_spaces: bool = True,      # 앞뒤 공백 제거
-    case_sensitive: bool = True,    # 대소문자 구분 (False면 전부 소문자로 비교)
-):
+    strip_spaces: bool = True,
+    case_sensitive: bool = True,
+    split_pattern: str = r"\s+",   # 공백 1개 이상 기준 분리
+) -> pd.DataFrame:
     """
-    동일 조건(cond_cols)에서 Fab별 value_col(텍스트)을 비교해
-    모두 같으면 True, 하나라도 다르면 False.
-    - Fab이 1개뿐인 조건은 비교군 없음 → False 처리.
-    - 동일 조건+동일 Fab 내에 값이 여러 개면(불안정) → False 처리.
+    동일 조건(cond_cols) + 같은 SEQ에서, OPERAND_VALUE를 공백 분리하여
+    위치별(VALUE_IDX)로 Fab 간 값이 모두 같은지 비교.
 
-    반환: 조건별로 Fab이 가로로 펼쳐진 DF + '__is_equal' 컬럼
+    반환: index = cond_cols + [SEQ, VALUE_IDX]
+         columns = 각 Fab
+         values = 위치별 텍스트
+         + '__is_equal' (행별 Fab 값 동일 여부)
+
+    규칙:
+    - Fab이 0~1개인 경우 → 비교군 없음 → False
+    - 동일 (조건+SEQ+VALUE_IDX, Fab) 내에 값이 복수로 상이하면(불안정) → False
+    - Fab 간 한 곳이라도 값이 비어있거나 다르면 → False
     """
 
-    # 필수 컬럼 체크
-    need = set([fab_col, value_col] + list(cond_cols))
+    # --- 0) 필수 컬럼 체크
+    need = set([fab_col, value_col, seq_col] + list(cond_cols))
     miss = [c for c in need if c not in df.columns]
     if miss:
         raise ValueError(f"Missing columns: {miss}")
 
-    # 텍스트 정규화 함수
-    def _norm_series(s: pd.Series) -> pd.Series:
-        s = s.dropna().astype(str)
-        if strip_spaces:
-            s = s.str.strip()
-        if not case_sensitive:
-            s = s.str.lower()
-        return s
+    # --- 1) 값 정규화
+    val = df[value_col].astype(str)
+    if strip_spaces:
+        val = val.str.strip()
+    if not case_sensitive:
+        val = val.str.lower()
+    df = df.copy()
+    df["_VAL_NORM"] = val
 
-    # (조건, Fab)별로 고유 텍스트 값 수집
+    # --- 2) 토큰화(공백 분리) & 토큰 수
+    def _split_or_empty(s: str) -> List[str]:
+        if s == "" or pd.isna(s):
+            return []
+        tokens = re.split(split_pattern, s)
+        tokens = [t for t in tokens if t != ""]
+        return tokens
+
+    df["_TOKENS"] = df["_VAL_NORM"].apply(_split_or_empty)
+    df["_TOK_CNT"] = df["_TOKENS"].apply(len)
+
+    # --- 3) explode: 위치 인덱스(VALUE_IDX: 1..n) 부여
+    # 토큰이 0개인 경우도 비교에 포함하려면 빈값을 명시적으로 남길 수 있지만
+    # 여기서는 실제 값이 있는 위치만 비교 대상으로 간주
+    df_exploded = (
+        df.loc[df["_TOK_CNT"] > 0, cond_cols + [seq_col, fab_col, "_TOKENS"]]
+          .explode("_TOKENS", ignore_index=True)
+    )
+    # 위치 인덱스 부여(같은 그룹(cond+SEQ, Fab) 내에서 1부터)
+    df_exploded["VALUE_IDX"] = (
+        df_exploded
+        .groupby(cond_cols + [seq_col, fab_col])
+        .cumcount() + 1
+    )
+    df_exploded.rename(columns={"_TOKENS": "_VAL_TOKEN"}, inplace=True)
+
+    # --- 4) (조건+SEQ+VALUE_IDX, Fab)별 고유 값 집계 → 한 Fab/위치에 여러 상이한 값이 있으면 불안정
+    def _collapse(vals: List[str]):
+        uniq = pd.unique(pd.Series(vals).dropna().astype(str)).tolist()
+        if len(uniq) == 0:
+            return pd.NA
+        if len(uniq) == 1:
+            return uniq[0]
+        # 복수 상이 값 -> 튜플로 표기해 두고 나중에 False 처리
+        return tuple(sorted(map(str, uniq)))
+
     agg = (
-        df.groupby(list(cond_cols) + [fab_col], dropna=False)[value_col]
-          .agg(lambda s: pd.unique(_norm_series(s)).tolist())
-          .reset_index(name="_vals")
+        df_exploded
+        .groupby(cond_cols + [seq_col, "VALUE_IDX", fab_col], dropna=False)["_VAL_TOKEN"]
+        .agg(_collapse)
+        .reset_index(name="_VAL")
     )
 
-    # 동일 Fab 내에 값이 0/1/2+ 개인지 정리
-    def _collapse(vals):
-        if len(vals) == 0:
-            return pd.NA
-        if len(vals) == 1:
-            return vals[0]                 # 단일 값
-        return tuple(sorted(map(str, vals)))  # 복수 값 → 튜플(불안정 표시)
-
-    agg["_val"] = agg["_vals"].apply(_collapse)
-
-    # Fab을 가로로 피벗
+    # --- 5) 가로 피벗(Fab 열)
     wide = agg.pivot_table(
-        index=cond_cols,
+        index=cond_cols + [seq_col, "VALUE_IDX"],
         columns=fab_col,
-        values="_val",
+        values="_VAL",
         aggfunc="first"
     )
 
-    # 행별 동일성 판정
-    def _is_equal_row(row):
+    # --- 6) 행별 동일성 판정
+    def _is_equal_row(row) -> bool:
+        # 존재하는 Fab 값만 수집
         vals = [v for v in row if pd.notna(v)]
-        # Fab이 0~1개만 존재 → 비교군 없음 → False
+        # Fab이 1개 이하면 비교군 없음
         if len(vals) <= 1:
             return False
-        # 동일 Fab 내에 값이 여러 개인 경우(tuple) → False
+        # 동일 Fab 내 복수 상이 값이 있었던 위치(튜플) → False
         if any(isinstance(v, tuple) for v in vals):
             return False
-        # 모두 같은 텍스트인가?
+        # 모두 동일?
         return len(set(vals)) == 1
 
     out = wide.copy()
@@ -75,77 +115,3 @@ def compare_equal_by_fab(
         out = out[~out["__is_equal"]]
 
     return out.reset_index()
-
-doc_id = '20622721760576608613'
-gds_df = goodDocsGetData(doc_id)
-
-base_df = gds_df.copy()
-test_df= base_df.copy()
-test_df['FAB'] = 'M15'
-
-setup_df = pd.concat([base_df, test_df], axis=0)
-setup_df.reset_index(inplace=True)
-print(setup_df)
-
-oper_list = list(setup_df['PROC'].unique())
-print(oper_list)
-
-
-
-
-
-for oper in oper_list:
-
-    setup_df_2 = setup_df[(setup_df['PROC'] == oper)].copy()
-    formula_df = pd.DataFrame()
-
-    Fab_list = list(setup_df_2['FAB'].unique())
-    print(Fab_list)
-    
-    for fab in Fab_list :
-        print(fab)
-        print(oper)
-        setup_df_3 = setup_df_2[(setup_df_2['FAB'] == fab)].copy()
-        print(setup_df_3.head())
-        sql_cond =list(setup_df_3['FORMULA GR'].unique())
-        print(sql_cond)
-        
-        project_name_2 = 'm15x-apc-compare-table2'
-        api_name_2 = f'{fab.lower()}-cmp-apc-formula-table'
-    
-        print(api_name_2)
-    
-        access_url_2 = f'http://dp.skhynix.com:8080/datahub/v1/api/{project_name_2}/{api_name_2}'
-        
-        api_key = '4f60cb40-4b6c-4240-94ad-8920fb1e8c50'
-        
-        headers = {'h-api-token':api_key, 
-                   'Content-Type':'application/json'}
-        
-        data_2 = {"bindParams": [sql_cond]}
-        
-        resp_2 = requests.post(access_url_2, headers=headers, json=data_2)
-        print(resp_2)
-    
-        try :
-            df_2 = pd.read_json(StringIO(resp_2.text))
-        
-            df_2['Fab'] = fab
-            
-            if df_2.empty == False:
-            
-                if formula_df.empty == True :
-                    formula_df = df_2
-                else :
-                    formula_df = pd.concat([formula_df, df_2], axis=0) 
-                    
-                    
-        except Exception as e :
-            print(f"Error : {e}")
-    print(formula_df)
-
-    formula_df['OPER']
-    
-    compare_formula_table = compare_equal_by_fab(formula_df, case_sensitive=False, strip_spaces=True)
-    compare_formula_table.to_csv(f'compare_formula_table_{oper}.csv')   
-
