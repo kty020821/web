@@ -1,128 +1,162 @@
 import pandas as pd
-import numpy as np
-import re
-from typing import List
+from typing import List, Literal, Optional
 
-def split_and_compare_by_fab_columns(
+def _setify(series: pd.Series, normalize_operand_value: bool = False):
+    """
+    그룹 내 값을 '집합'으로 정리.
+    - SEQ: 값 그대로 집합
+    - OPERAND_VALUE: normalize 옵션이 True면 공백 기준 토큰화 후 정렬하여 집합화
+    """
+    vals = series.dropna().astype(str).tolist()
+    if not normalize_operand_value:
+        return frozenset(vals)
+    # 공백/연속공백 정리 & 토큰화 (예: "AB_CD EF" -> {"AB_CD","EF"})
+    norm = []
+    for v in vals:
+        tokens = [t for t in " ".join(v.split()).split(" ") if t != ""]
+        norm.append(" ".join(tokens))  # 원문 보존 버전
+    # 토큰 단위 동등성 판정이 목적이면 아래 처리를 사용:
+    # tokens_total = []
+    # for v in vals:
+    #     tokens_total.extend([t for t in " ".join(v.split()).split(" ") if t])
+    # return frozenset(tokens_total)
+    return frozenset(norm)
+
+def attach_oper_from_B(
+    df_a: pd.DataFrame,
+    df_b: pd.DataFrame,
+    key: str = "FORMULA_GRP_NAME",
+    b_oper_col: str = "OPER",
+) -> pd.DataFrame:
+    """
+    A에 B의 OPER를 key 기준으로 매칭해 A['OPER'] 컬럼을 생성한다.
+    """
+    if b_oper_col not in df_b.columns:
+        raise KeyError(f"B 테이블에 '{b_oper_col}' 컬럼이 없습니다.")
+    if key not in df_a.columns or key not in df_b.columns:
+        raise KeyError(f"양쪽 테이블에 '{key}' 컬럼이 있어야 합니다.")
+
+    out = df_a.merge(df_b[[key, b_oper_col]], on=key, how="left", validate="m:1")
+    out = out.rename(columns={b_oper_col: "OPER"})
+    return out
+
+def compare_m15_vs_others(
     df: pd.DataFrame,
-    fab_col: str = "Fab",
-    cond_cols: List[str] = ["FORMULA_GRP_NAME", "FORMULA", "OPERAND_NAME"],
+    fab_col: str = "FAB",
+    keys_for_match: List[str] = ["OPER", "FORMULA_GRP_NAME", "FORMULA", "OPERAND_NAME"],
     seq_col: str = "SEQ",
-    value_col: str = "OPERAND_VALUE",
-    case_sensitive: bool = True,
-    strip_spaces: bool = True,
+    val_col: str = "OPERAND_VALUE",
+    normalize_operand_value: bool = False,
     mismatched_only: bool = False,
-):
+    keep_examples: bool = True,
+) -> pd.DataFrame:
     """
-    1) OPERAND_VALUE를 공백 기준으로 분리하여 OPERAND_VALUE_1..K 컬럼 생성
-    2) (cond_cols + SEQ)별로 K(최대 토큰 수)를 맞춤
-    3) (행) cond_cols + SEQ / (열) Fab__OPERAND_VALUE_i 로 피벗
-    4) 위치별 동일성(__equal_OPERAND_VALUE_i)과 전체 동일성(__is_equal) 제공
+    M15와 '다른 각 FAB'를 1:1로 비교한다.
+    - 같은 (OPER, FORMULA_GRP_NAME, FORMULA, OPERAND_NAME) 조합에서
+      SEQ와 OPERAND_VALUE가 동일한지 판정.
+    - 동일성 기준: 각 FAB 그룹 내부의 고유값 '집합' 비교 (여러 행 존재해도 OK).
     """
+    required = set([fab_col, seq_col, val_col] + keys_for_match)
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise KeyError(f"필수 컬럼 누락: {missing}")
 
-    # --- 필수 컬럼 확인
-    need = set([fab_col, value_col, seq_col] + list(cond_cols))
-    miss = [c for c in need if c not in df.columns]
-    if miss:
-        raise ValueError(f"Missing columns: {miss}")
+    # 분리
+    m15 = df[df[fab_col] == "M15"].copy()
+    others = df[df[fab_col] != "M15"].copy()
 
-    work = df.copy()
+    # M15 집계
+    gcols = keys_for_match
+    m15_agg = m15.groupby(gcols).agg(
+        M15_SEQ_values=(seq_col, lambda s: _setify(s, False)),
+        M15_VAL_values=(val_col, lambda s: _setify(s, normalize_operand_value)),
+    ).reset_index()
 
-    # --- Fab 표준화(오탈자/대소문자 혼선 방지)
-    work[fab_col] = work[fab_col].astype(str).str.strip()
+    # 각 FAB별 집계 후 M15와 조인 & 비교
+    results = []
+    for fab_name, g in others.groupby(fab_col):
+        oth_agg = g.groupby(gcols).agg(
+            OTHER_SEQ_values=(seq_col, lambda s: _setify(s, False)),
+            OTHER_VAL_values=(val_col, lambda s: _setify(s, normalize_operand_value)),
+        ).reset_index()
+        merged = m15_agg.merge(oth_agg, on=gcols, how="outer", indicator=True)
 
-    # --- 값 정규화
-    val = work[value_col].astype(str)
-    if strip_spaces:
-        val = val.str.strip()
-        # 숨은 공백들을 일반 공백으로 치환
-        val = (val
-               .str.replace(r"[\u00A0\u2000-\u200B\u3000]", " ", regex=True)
-               .str.replace(r"\s+", " ", regex=True))
-    if not case_sensitive:
-        val = val.str.lower()
-    work["_VAL_NORM"] = val
+        # 비교 플래그
+        merged["Compare_Fab"] = fab_name
+        merged["SEQ_same"] = merged["M15_SEQ_values"].eq(merged["OTHER_SEQ_values"])
+        merged["VAL_same"] = merged["M15_VAL_values"].eq(merged["OTHER_VAL_values"])
 
-    # --- 토큰 분리 (공백 기준)
-    def _split_tokens(s: str):
-        if s is None or s == "" or pd.isna(s):
-            return []
-        toks = re.split(r"\s+", s)
-        toks = [t for t in toks if t != ""]
-        return toks
+        # 어느 한쪽에만 존재하는 경우(outer join으로 드러남)
+        merged["exists_in_M15"] = merged["_merge"].isin(["both", "left_only"])
+        merged["exists_in_Other"] = merged["_merge"].isin(["both", "right_only"])
 
-    work["_TOKENS"] = work["_VAL_NORM"].apply(_split_tokens)
+        # 보기 좋게 정리
+        cols = gcols + [
+            "Compare_Fab",
+            "exists_in_M15",
+            "exists_in_Other",
+            "M15_SEQ_values",
+            "OTHER_SEQ_values",
+            "SEQ_same",
+            "M15_VAL_values",
+            "OTHER_VAL_values",
+            "VAL_same",
+        ]
 
-    key_cols = list(cond_cols) + [seq_col]
+        if mismatched_only:
+            view = merged[
+                (~merged["SEQ_same"].fillna(False))
+                | (~merged["VAL_same"].fillna(False))
+                | (~merged["exists_in_M15"])
+                | (~merged["exists_in_Other"])
+            ][cols].copy()
+        else:
+            view = merged[cols].copy()
 
-    # 같은 (조건+SEQ+Fab)에 여러 행이 있으면 첫 값을 사용(필요하면 규칙 바꿔)
-    grp = (work.groupby(key_cols + [fab_col], dropna=False)["_TOKENS"]
-                .agg(lambda s: s.iloc[0] if len(s) > 0 else [])
-                .reset_index())
+        # 예시용 원본 행 몇 개 남기기 (디버깅에 유용)
+        if keep_examples:
+            # 키 기준으로 M15/Other 예시 1~2개씩
+            def sample_join(sub_keys):
+                sk = dict(zip(gcols, sub_keys))
+                ex_m15 = m15.query(" & ".join([f"`{k}` == @sk[k]" for k in gcols])).head(2)
+                ex_oth = g.query(" & ".join([f"`{k}` == @sk[k]" for k in gcols])).head(2)
+                return pd.Series({
+                    "M15_examples": ex_m15[[fab_col, seq_col, val_col]].to_dict("records"),
+                    "Other_examples": ex_oth[[fab_col, seq_col, val_col]].to_dict("records"),
+                })
 
-    # (조건+SEQ)별 최대 토큰 수
-    max_tok = (grp.assign(_len=grp["_TOKENS"].apply(len))
-                   .groupby(key_cols, dropna=False)["_len"]
-                   .max()
-                   .reset_index(name="MAX_K"))
+            examples = view[gcols].drop_duplicates().apply(
+                lambda row: sample_join(tuple(row[k] for k in gcols)), axis=1
+            )
+            view = pd.concat([view.reset_index(drop=True), examples.reset_index(drop=True)], axis=1)
 
-    # (조건+SEQ+Fab) 레벨에서 OPERAND_VALUE_1..K 컬럼을 생성
-    rows = []
-    for _, r in grp.merge(max_tok, on=key_cols, how="left").iterrows():
-        base = {c: r[c] for c in key_cols + [fab_col]}
-        toks = r["_TOKENS"]
-        K = int(r["MAX_K"]) if pd.notna(r["MAX_K"]) else 0
-        for i in range(1, K + 1):
-            base[f"OPERAND_VALUE_{i}"] = toks[i-1] if i-1 < len(toks) else np.nan
-        rows.append(base)
+        results.append(view)
 
-    if not rows:
-        # 데이터가 비어있다면 빈 DF 반환
-        out = pd.DataFrame(columns=key_cols + ["__is_equal"])
-        return out
+    if not results:
+        # M15만 있거나 others가 없을 때
+        return pd.DataFrame(columns=gcols + [
+            "Compare_Fab","exists_in_M15","exists_in_Other",
+            "M15_SEQ_values","OTHER_SEQ_values","SEQ_same",
+            "M15_VAL_values","OTHER_VAL_values","VAL_same",
+            "M15_examples","Other_examples"
+        ])
 
-    flat = pd.DataFrame(rows)
+    out = pd.concat(results, axis=0, ignore_index=True)
 
-    # 피벗: (행) key_cols / (열) Fab__OPERAND_VALUE_i
-    value_cols = sorted([c for c in flat.columns if c.startswith("OPERAND_VALUE_")],
-                        key=lambda x: int(x.split("_")[-1]))
-    flat["__Fab"] = flat[fab_col]  # 복사
-    wide = flat.pivot_table(
-        index=key_cols,
-        columns="__Fab",
-        values=value_cols,
-        aggfunc="first"
-    )
+    # 정렬: 키 → 일치여부 → 비교대상 FAB
+    out = out.sort_values(gcols + ["Compare_Fab"]).reset_index(drop=True)
+    return out
 
-    # 컬럼 플랫하게: ('OPERAND_VALUE_1','M15') -> 'M15__OPERAND_VALUE_1'
-    wide.columns = [f"{fab}__{col}" for col, fab in wide.columns]
-    wide = wide.reset_index()
-
-    # Fab 목록/포지션 목록 구하기
-    fabs = sorted(list({c.split("__")[0] for c in wide.columns if "__OPERAND_VALUE_" in c}))
-    positions = sorted(list({c.split("__")[1] for c in wide.columns if "__OPERAND_VALUE_" in c}),
-                       key=lambda x: int(x.split("_")[-1]) if "_" in x else 0)
-
-    # 위치별 동일성 플래그
-    equal_flags = []
-    for pos in positions:
-        cols = [f"{f}__{pos}" for f in fabs if f"{f}__{pos}" in wide.columns]
-        flag_col = f"__equal_{pos}"
-        def _eq_row(row):
-            vals = [row[c] for c in cols if pd.notna(row[c])]
-            if len(vals) <= 1:
-                return False
-            return len(set(vals)) == 1
-        wide[flag_col] = wide.apply(_eq_row, axis=1)
-        equal_flags.append(flag_col)
-
-    # 전체 동일성: 모든 위치가 True여야 함
-    if equal_flags:
-        wide["__is_equal"] = wide[equal_flags].all(axis=1)
-    else:
-        wide["__is_equal"] = False  # 비교할 포지션이 없으면 False
-
-    if mismatched_only:
-        wide = wide[~wide["__is_equal"]].copy()
-
-    return wide
+# ========== 사용 예시 ==========
+# df_a: [FAB, FORMULA_GRP_NAME, FORMULA, OPERAND_NAME, SEQ, OPERAND_VALUE, ...]
+# df_b: [FORMULA_GRP_NAME, OPER, (PROC ...)]
+# df_ab = attach_oper_from_B(df_a, df_b, key="FORMULA_GRP_NAME", b_oper_col="OPER")
+# result = compare_m15_vs_others(df_ab,
+#                                fab_col="FAB",
+#                                keys_for_match=["OPER","FORMULA_GRP_NAME","FORMULA","OPERAND_NAME"],
+#                                seq_col="SEQ",
+#                                val_col="OPERAND_VALUE",
+#                                normalize_operand_value=False,   # 공백 토큰화 동등성 필요하면 True
+#                                mismatched_only=True,            # 차이만 보고 싶으면 True
+#                                keep_examples=True)              # 원본 예시 몇 개 포함
+# result.head()
