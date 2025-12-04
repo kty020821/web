@@ -1,39 +1,75 @@
 import pandas as pd
 import numpy as np
 
-def simple_expand_kv_cols(df, col_names, key_case="lower", prefix_sep='__'):
+def compare_and_detail_by_group(df, group_col, id_col, exclude_cols=None, missing_token="N/A"):
     """
-    Key-Value 문자열 컬럼 목록을 파싱하고 확장하여 원본 DataFrame에 병합합니다.
-
+    특정 그룹 열(group_col)을 기준으로 그룹화하여, 각 장비(id_col)의 값을 
+    개별 컬럼으로 표시하며 일치 여부를 비교합니다.
+    
     Args:
-        df (pd.DataFrame): 원본 데이터프레임.
-        col_names (list): 확장할 Key-Value 컬럼 이름 목록 (예: ['열A', '열B']).
-        key_case (str): 키를 'lower' 또는 'upper'로 변환할지 지정.
-        prefix_sep (str): 새 컬럼 이름에 붙일 접두사 구분 기호.
+        df (pd.DataFrame): Key-Value 확장이 완료된 데이터프레임.
+        group_col (str): 그룹화 기준 열 (예: 'recipe_para').
+        id_col (str): 장비 ID 열 (예: 'eqp_id').
+        exclude_cols (list): 비교에서 제외할 추가 열.
+        missing_token (str): 결측치 비교 시 사용할 토큰.
     """
     
-    # 원본 DataFrame의 인덱스를 보존하면서 복사합니다.
-    df_expanded = df.copy() 
-
-    for col in col_names:
-        # 1. parse_kv_string 함수를 모든 행에 적용하여 딕셔너리 리스트를 만듭니다.
-        #    apply(lambda x: ...)를 사용하면 각 셀을 딕셔너리로 변환합니다.
-        parsed_dicts = df[col].apply(
-            lambda x: parse_kv_string(x, key_case=key_case)
-        )
-        
-        # 2. 딕셔너리 리스트를 Pandas DataFrame으로 변환합니다.
-        #    (index=df.index를 사용하여 원본 DataFrame의 행 인덱스를 유지합니다.)
-        temp_df = pd.DataFrame(parsed_dicts.tolist(), index=df.index)
-        
-        # 3. 새로운 컬럼 이름에 접두사(예: '열A__')를 붙여 충돌을 방지합니다.
-        new_cols = {k: f"{col}{prefix_sep}{k}" for k in temp_df.columns}
-        temp_df = temp_df.rename(columns=new_cols)
-        
-        # 4. 원본 DataFrame에 병합합니다.
-        df_expanded = pd.concat([df_expanded, temp_df], axis=1)
-
-    # Key-Value 문자열이었던 원본 컬럼을 삭제합니다.
-    df_expanded = df_expanded.drop(columns=col_names)
+    if exclude_cols is None:
+        exclude_cols = []
     
-    return df_expanded
+    # 1. 고유한 장비 호기 목록을 추출합니다. (예: ['6KCCF801', '5KCC8801'])
+    eqps = df[id_col].astype(str).unique().tolist() 
+    
+    # 비교에서 제외할 모든 컬럼을 정의합니다.
+    all_exclude = set(exclude_cols + [group_col, id_col])
+    
+    out_rows = []
+    
+    # 2. 그룹 키를 기준으로 데이터를 그룹화합니다.
+    grouped = df.groupby(group_col, dropna=False)
+    
+    for group_val, g in grouped:
+        # 실제 파라미터 값을 가진 컬럼 목록을 추출합니다.
+        value_cols = [c for c in g.columns if c not in all_exclude]
+        
+        # 그룹 내에서 장비 ID가 중복된 경우 첫 번째 값만 사용합니다.
+        dedup = g.drop_duplicates(subset=[id_col], keep="first")
+
+        for col in value_cols:
+            series = {}
+            
+            # 3. 각 장비 호기별로 현재 컬럼의 값을 수집합니다.
+            for eq in eqps:
+                eq_row = dedup[dedup[id_col].astype(str) == str(eq)]
+                
+                # 해당 장비가 이 그룹에 없으면 None, 있으면 해당 값을 할당합니다.
+                value = eq_row.iloc[0][col] if not eq_row.empty else None
+                series[str(eq)] = value
+
+            # 4. 수집된 값을 기반으로 일치 여부를 판단합니다.
+            value_series = pd.Series(series)
+            
+            # None/NaN을 'missing_token'으로 채워 결측치도 불일치로 간주하여 비교합니다.
+            cmp_series = value_series.fillna(missing_token) 
+            is_same = (cmp_series.nunique() <= 1)
+            
+            # 5. 결과 행을 구성합니다. (unique_count, values_list 제외)
+            row = {
+                group_col: group_val,      # 그룹 키 값 (예: recipe_para)
+                "parameter_column": col,   # 파라미터 컬럼 이름 (예: 열A__WID)
+                "is_same": bool(is_same),  # 일치 여부
+            }
+            
+            # 6. 장비별 값을 결과 딕셔너리에 추가합니다.
+            for eq in eqps:
+                row[str(eq)] = series[str(eq)] # 실제 값 또는 None
+            
+            out_rows.append(row)
+
+    # 7. 최종 DataFrame 생성 및 정렬
+    result = pd.DataFrame(out_rows)
+    if not result.empty:
+        # 불일치(False) 항목이 먼저 오도록 정렬합니다.
+        result = result.sort_values([group_col, "is_same", "parameter_column"], ascending=[True, True, True]).reset_index(drop=True)
+        
+    return result
