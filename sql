@@ -1,48 +1,39 @@
-def compare_by_recipe(df, id_col="eqp_id", recipe_id_col="recipe_id", recipe_para_col="recipe_para",
-                      treat_missing_as_mismatch=True, missing_token="__MISSING__"):
+import pandas as pd
+import numpy as np
+
+def simple_expand_kv_cols(df, col_names, key_case="lower", prefix_sep='__'):
     """
-    (recipe_id, recipe_para) 별로 N대 장비의 나머지 컬럼 비교.
-    결과: recipe_id, recipe_para, column, 각 장비 값, same, nunique, values
+    Key-Value 문자열 컬럼 목록을 파싱하고 확장하여 원본 DataFrame에 병합합니다.
+
+    Args:
+        df (pd.DataFrame): 원본 데이터프레임.
+        col_names (list): 확장할 Key-Value 컬럼 이름 목록 (예: ['열A', '열B']).
+        key_case (str): 키를 'lower' 또는 'upper'로 변환할지 지정.
+        prefix_sep (str): 새 컬럼 이름에 붙일 접두사 구분 기호.
     """
-    df = preprocess_drop_rawid(df).copy()
-    exclude = {id_col, recipe_id_col, recipe_para_col}
-    out_rows = []
-    eqps = df[id_col].astype(str).unique().tolist()
+    
+    # 원본 DataFrame의 인덱스를 보존하면서 복사합니다.
+    df_expanded = df.copy() 
 
-    grouped = df.groupby([recipe_id_col, recipe_para_col], dropna=False)
-    for (rid, rpara), g in grouped:
-        g_sorted = g.sort_index()
-        dedup = g_sorted.drop_duplicates(subset=[id_col], keep="first")
-        value_cols = [c for c in dedup.columns if c not in exclude]
+    for col in col_names:
+        # 1. parse_kv_string 함수를 모든 행에 적용하여 딕셔너리 리스트를 만듭니다.
+        #    apply(lambda x: ...)를 사용하면 각 셀을 딕셔너리로 변환합니다.
+        parsed_dicts = df[col].apply(
+            lambda x: parse_kv_string(x, key_case=key_case)
+        )
+        
+        # 2. 딕셔너리 리스트를 Pandas DataFrame으로 변환합니다.
+        #    (index=df.index를 사용하여 원본 DataFrame의 행 인덱스를 유지합니다.)
+        temp_df = pd.DataFrame(parsed_dicts.tolist(), index=df.index)
+        
+        # 3. 새로운 컬럼 이름에 접두사(예: '열A__')를 붙여 충돌을 방지합니다.
+        new_cols = {k: f"{col}{prefix_sep}{k}" for k in temp_df.columns}
+        temp_df = temp_df.rename(columns=new_cols)
+        
+        # 4. 원본 DataFrame에 병합합니다.
+        df_expanded = pd.concat([df_expanded, temp_df], axis=1)
 
-        for col in value_cols:
-            # 장비 순서대로 값 수집
-            series = pd.Series(
-                [ (None if dedup[dedup[id_col].astype(str)==str(eq)].empty
-                    else dedup[dedup[id_col].astype(str)==str(eq)].iloc[0][col])
-                  for eq in eqps ],
-                index=eqps
-            )
-            # 결측 처리 정책
-            cmp_series = series.fillna(missing_token) if treat_missing_as_mismatch else series
-            uniq = pd.unique(cmp_series.dropna() if not treat_missing_as_mismatch else cmp_series).tolist()
-            nunique = len(uniq)
-            same = (nunique <= 1)
-
-            row = {
-                recipe_id_col: rid,
-                recipe_para_col: rpara,
-                "column": col,
-                "nunique": nunique,
-                # *** 이 부분을 수정합니다. ***
-                "values": str(uniq), # 리스트를 문자열로 변환합니다.
-                "result": bool(same),
-            }
-            for eq in eqps:
-                row[str(eq)] = series.get(eq, None)
-            out_rows.append(row)
-
-    result = pd.DataFrame(out_rows)
-    if not result.empty:
-        result = result.sort_values([recipe_id_col, recipe_para_col, "result", "column"], ascending=[True, True, True, True]).reset_index(drop=True)
-    return result
+    # Key-Value 문자열이었던 원본 컬럼을 삭제합니다.
+    df_expanded = df_expanded.drop(columns=col_names)
+    
+    return df_expanded
