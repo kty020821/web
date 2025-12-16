@@ -139,28 +139,6 @@ ref_recipe_id = refRecipeId
 target_recipe_id = targetRecipeId
 
 
-project_name = 'm15x-apc-compare-table1'
-api_key = '4f60cb40-4b6c-4240-94ad-8920fb1e8c50'
-headers = {'h-api-token':api_key, 
-           'Content-Type':'application/json'}
-
-api_name = f'{ref_fab_id}-cmp-apc-modeling-table'
-access_url = f'http://dp.skhynix.com:8080/datahub/v1/api/{project_name}/{api_name}'
-data = {"bindParams": [f'EQP_ID={ref_eqp_id};PROCESS_ID=*;OPERATION_ID=*;RECIPE_ID={ref_recipe_id};%']}
-resp = requests.post(access_url, headers=headers, json=data)
-df_ref = pd.read_json(StringIO(resp.text))
-
-
-api_name_target = f'{target_fab_id}-cmp-apc-modeling-table'
-access_url_target = f'http://dp.skhynix.com:8080/datahub/v1/api/{project_name}/{api_name_target}'
-data_target = {"bindParams": [f'EQP_ID={target_eqp_id};PROCESS_ID=*;OPERATION_ID=*;RECIPE_ID={target_recipe_id};%']}
-resp_target = requests.post(access_url_target, headers=headers, json=data_target)
-df_target = pd.read_json(StringIO(resp_target.text))
-
-modeling_df = pd.concat([df_ref, df_target], axis=0)
-
-modeling_df_1 = modeling_df[modeling_df['SETUP_KEY_RAWID'] == 434].copy()
-setup_df = expand_two_kv_cols_separately(modeling_df_1, 'SETUP_KEY_VALUE', 'SETUP_DATA_VALUE', key_case="lower" )
 
 compare_modeling_table = compare_and_detail_by_group(df=setup_df, group_col="recipe_para", id_col="eqp_id", exclude_cols=["RAWID"], missing_token="__NA__")
 
